@@ -1,0 +1,125 @@
+---
+format_version: '11'
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+project_type: react-native
+pipelines:
+  test-sharding:
+    stages:
+    - stage-build: {}
+    - stage-test: {}
+stages:
+  stage-build:
+    workflows:
+    - primary: {}
+  stage-test:
+    workflows:
+    - test-shard-1: {}
+    - test-shard-2: {}
+workflows:
+  _setup:
+    steps:
+    - activate-ssh-key@4: {}
+    - git-clone@8: {}
+    - restore-npm-cache@1: {}
+    - restore-cocoapods-cache@1:
+        inputs:
+        - verbose: 'true'
+    - yarn@0:
+        inputs:
+        - workdir: "$WORKDIR"
+        - command: install
+    - script@1:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -e
+            set -o pipefail
+            set -x
+
+            npm rebuild detox
+            brew tap wix/brew
+            brew install applesimutils
+            cd ios
+            pod install
+  _shard_setup:
+    steps:
+    - pull-intermediate-files@1:
+        inputs:
+        - verbose: 'true'
+    - script@1:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -e
+            set -o pipefail
+            set -x
+            
+            mv $TEST_BUILD ios/build/
+  primary:
+    before_run:
+    - _setup
+    steps:
+    - yarn@0:
+        inputs:
+        - workdir: "$WORKDIR"
+        - command: detox build --configuration ios.sim.release
+    - save-npm-cache@1: {}
+    - save-cocoapods-cache@1:
+        inputs:
+        - verbose: 'true'
+    - deploy-to-bitrise-io@2:
+        inputs:
+        - debug_mode: 'true'
+        - pipeline_intermediate_files: "./ios/build/Build:TEST_BUILD"
+  test-shard-1:
+    before_run:
+    - _setup
+    - _shard_setup
+    steps:
+    - yarn@0:
+        inputs:
+        - workdir: "$WORKDIR"
+        - command: detox test --configuration ios.sim.release --config e2e/jest.config.js --cleanup -l verbose
+    - deploy-to-bitrise-io@2: {}
+  test-shard-2:
+    before_run:
+    - _setup
+    - _shard_setup
+    steps:
+    - yarn@0:
+        inputs:
+        - workdir: "$WORKDIR"
+        - command: detox test --configuration ios.sim.release --config e2e/jest2.config.js --cleanup -l verbose
+    - deploy-to-bitrise-io@2: {}
+meta:
+  bitrise.io:
+    stack: osx-xcode-14.3.x-ventura
+    machine_type_id: g2-m1-max.10core
+app:
+  envs:
+  - opts:
+      is_expand: false
+    WORKDIR: "."
+  - opts:
+      is_expand: false
+    PROJECT_LOCATION: android
+  - opts:
+      is_expand: false
+    MODULE: app
+  - opts:
+      is_expand: false
+    VARIANT: Debug
+  - opts:
+      is_expand: false
+    BITRISE_PROJECT_PATH: ios/BitriseRNDetox.xcworkspace
+  - opts:
+      is_expand: false
+    BITRISE_SCHEME: BitriseRNDetox
+  - opts:
+      is_expand: false
+    BITRISE_DISTRIBUTION_METHOD: development
+trigger_map:
+- push_branch: main
+  workflow: primary
+- pull_request_source_branch: "*"
+  workflow: primary
